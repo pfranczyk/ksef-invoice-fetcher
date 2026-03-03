@@ -1,0 +1,51 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Token storage
+
+# Output directories
+output/
+tmp/
+
+#templates
+templates/*
+!templates/Faktura.docx
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+*.crt
+*.key
+*.token
+*.pem
+
+# External KSeF documentation (not part of project)
+ksef-docs/
+open-api.json
+
+# Token storage directory
+tokens/
+
+# Test coverage
+coverage/
+
+# Claude Code
+.claude/
