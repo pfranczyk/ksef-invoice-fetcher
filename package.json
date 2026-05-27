@@ -1,55 +1,73 @@
 {
-  "name": "ksef-invoice-fetcher",
-  "version": "0.6.0",
-  "description": "Aplikacja do pobierania faktur z KSeF API 2.0",
+  "name": "@logrox/ksef",
+  "version": "0.7.0",
+  "description": "CLI do pobierania faktur i generowania PDF z KSeF API 2.0",
   "license": "ISC",
   "author": "Paweł Franczyk",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "bin": {
-    "ksef": "src/index.ts"
+    "ksef": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "node src/index.ts",
-    "auth": "node src/index.ts",
-    "fetch": "node src/index.ts --df",
-    "generate-pdf": "node src/index.ts --generate-pdf",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",
+    "format:check": "biome format src/",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build",
+    "start": "node dist/index.js"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/pfranczyk/ksef-invoice-fetcher"
   },
   "bugs": {
-    "url": ""
+    "url": "https://github.com/pfranczyk/ksef-invoice-fetcher/issues"
   },
-  "homepage": "",
+  "homepage": "https://github.com/pfranczyk/ksef-invoice-fetcher#readme",
+  "keywords": [
+    "ksef",
+    "faktura",
+    "invoice",
+    "cli",
+    "ksef-api-2",
+    "poland",
+    "tax"
+  ],
   "dependencies": {
-    "adm-zip": "^0.5.16",
+    "@logrox/ksef-login": "^0.1.0",
+    "adm-zip": "^0.5.17",
     "commander": "^14.0.3",
-    "docxtemplater": "^3.68.3",
-    "dotenv": "^17.3.1",
-    "node-forge": "^1.3.3",
-    "pizzip": "^3.2.0",
+    "node-forge": "^1.4.0",
+    "pdfmake": "^0.2.23",
     "winston": "^3.19.0",
     "xml2js": "^0.6.2"
   },
-  "engines": {
-    "node": ">=20.0.0"
-  },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
-    "@types/adm-zip": "^0.5.7",
-    "@types/node": "^25.3.1",
+    "@biomejs/biome": "^2.4.16",
+    "@types/adm-zip": "^0.5.8",
+    "@types/node": "^25.9.1",
     "@types/node-forge": "^1.3.14",
+    "@types/pdfmake": "^0.2.13",
     "@types/xml2js": "^0.4.14",
     "@vitest/coverage-v8": "^4.0.18",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

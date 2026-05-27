@@ -1,298 +1,203 @@
+#!/usr/bin/env node
 /**
- * Punkt wejścia aplikacji KSeF Invoice Fetcher
- * Etap 1: Logowanie do systemu KSeF
- * Etap 2: Pobieranie faktur
- * Etap 3: Generowanie faktur PDF
+ * Punkt wejścia CLI @logrox/ksef
  */
-import { Command } from 'commander';
-import { authenticate } from './auth/ksef-token-auth.ts';
-import { getValidAccessToken, saveTokens } from './auth/token-manager.ts';
-import { getConfig, validateConfig } from './config/env.ts';
-import { runSingleExport } from './invoices/export-service.ts';
-import { generatePdfForMonth } from './pdf/pdf-generator.ts';
-import type { IConfig } from './types.ts';
-import logger, { maskSensitiveData } from './utils/logger.ts';
-import {
-  parseMonthToDateRange,
-  type TValidateDateRangeReturn,
-  validateDateRange,
-  validateNIP,
-  validatePath,
-} from './utils/validator.ts';
-
-// Zmienna globalna dla graceful shutdown — przypisywana gdy eksport używa katalogu tymczasowego na HDD
-const currentTempDir: string | null = null;
-
-/** Opcje CLI przekazywane do funkcji pomocniczych */
-type TCliOptions = {
-  readonly dateFrom?: string | true;
-  readonly dateTo?: string;
-  readonly output?: string;
-  readonly generatePdf?: string | true;
-  readonly template?: string;
-  readonly pdfOutput?: string;
-  readonly startDay?: string;
-  readonly endDay?: string;
-};
+import { Command, CommanderError, Help } from 'commander';
+import type { TGlobalOpts } from './commands/_shared.ts';
+import { fetchCmd, type TFetchOpts } from './commands/fetch.ts';
+import { initCmd } from './commands/init.ts';
+import { intervalCmd } from './commands/interval.ts';
+import { loginCmd } from './commands/login.ts';
+import { marginCmd } from './commands/margin.ts';
+import { pdfCmd, type TPdfOpts } from './commands/pdf.ts';
+import logger from './utils/logger.ts';
 
 /**
- * Handler dla SIGINT (Ctrl+C)
+ * Tłumaczy komunikat błędu Commandera na język polski.
+ * @param {CommanderError} err - Błąd zgłoszony przez Commandera
+ * @returns {string} Komunikat po polsku (bez prefiksu "error: ")
  */
-async function handleShutdown(): Promise<void> {
-  logger.info('\nAplikacja przerwana przez użytkownika');
-
-  if (currentTempDir) {
-    try {
-      const { deleteDirectory, fileExists } = await import('./utils/file-system.ts');
-      if (await fileExists(currentTempDir)) {
-        logger.info(`Czyszczenie plików tymczasowych: ${currentTempDir}`);
-        await deleteDirectory(currentTempDir);
-        logger.info('Pliki tymczasowe usunięte pomyślnie');
-      }
-    } catch (error) {
-      logger.error(`Nie udało się wyczyścić plików tymczasowych: ${(error as Error).message}`);
-    }
+function translateCommanderError(err: CommanderError): string {
+  const raw: string = err.message.replace(/^error:\s*/, '');
+  switch (err.code) {
+    case 'commander.missingArgument':
+      return raw.replace(/^missing required argument '(.+?)'$/, "Brak wymaganego argumentu '$1'.");
+    case 'commander.missingMandatoryOptionValue':
+      return raw.replace(/^required option '(.+?)' not specified$/, "Brak wymaganej opcji '$1'.");
+    case 'commander.optionMissingArgument':
+      return raw.replace(/^option '(.+?)' argument missing$/, "Brak wartości dla opcji '$1'.");
+    case 'commander.unknownOption':
+      return raw.replace(/^unknown option '(.+?)'$/, "Nieznana opcja '$1'.");
+    case 'commander.unknownCommand':
+      return raw.replace(/^unknown command '(.+?)'$/, "Nieznana komenda '$1'.");
+    case 'commander.excessArguments':
+      return raw.replace(
+        /^too many arguments for '(.+?)'\. Expected (\d+) argument(s?) but got (\d+)\.$/,
+        "Za dużo argumentów dla '$1'. Oczekiwano $2, otrzymano $4.",
+      );
+    case 'commander.invalidArgument':
+      return raw
+        .replace(/^option '(.+?)' argument '(.+?)' is invalid\.\s*(.*)$/, "Nieprawidłowa wartość '$2' opcji '$1'. $3")
+        .replace(
+          /^command-argument value '(.+?)' is invalid for argument '(.+?)'\.\s*(.*)$/,
+          "Nieprawidłowa wartość '$1' argumentu '$2'. $3",
+        )
+        .trimEnd();
+    default:
+      return raw;
   }
-
-  logger.info('Zamykanie aplikacji');
-  process.exit(0);
 }
 
-// Rejestracja handlera SIGINT
+/**
+ * Kody błędów Commandera, dla których ma się pojawić help konkretnej subkomendy
+ * zamiast globalnej sugestii `ksef --help`.
+ */
+const SUBCOMMAND_HELP_ERROR_CODES = new Set<string>([
+  'commander.missingArgument',
+  'commander.missingMandatoryOptionValue',
+  'commander.optionMissingArgument',
+  'commander.invalidArgument',
+  'commander.excessArguments',
+  'commander.unknownOption',
+]);
+
+/**
+ * Znajduje subkomendę z process.argv: pierwszy token nie będący flagą,
+ * który pasuje nazwą do jednej z zarejestrowanych subkomend.
+ * @returns {Command | undefined} Znaleziona subkomenda lub undefined
+ */
+function findInvokedSubcommand(): Command | undefined {
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith('-')) continue;
+    const cmd = program.commands.find((c) => c.name() === arg);
+    if (cmd !== undefined) return cmd;
+  }
+  return undefined;
+}
+
+/**
+ * Handler dla SIGINT (Ctrl+C) — czyste zamknięcie.
+ * @returns {void}
+ */
+function handleShutdown(): void {
+  logger.info('\nAplikacja przerwana przez użytkownika');
+  logger.info('Zamykanie aplikacji');
+  process.exitCode = 0;
+}
+
 process.on('SIGINT', handleShutdown);
 
-/**
- * Zwraca poprzedni miesiąc kalendarzowy w formacie YYYY-MM.
- * @returns Poprzedni miesiąc, np. "2026-01" gdy bieżący to luty 2026
- */
-function getPreviousMonth(): string {
-  const now = new Date();
-  const year = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
-  const month = now.getMonth() === 0 ? 12 : now.getMonth(); // getMonth() zwraca 0-11
-  return `${year}-${String(month).padStart(2, '0')}`;
-}
+const program = new Command();
 
-/**
- * Parsuje i waliduje zakres dat z opcji CLI.
- * @param {TCliOptions} options - Opcje CLI z Commander.js
- * @returns {TValidateDateRangeReturn | null} Zakres dat lub null (tryb testu autoryzacji)
- */
-function resolveDateRange(options: TCliOptions): TValidateDateRangeReturn | null {
-  // Rozwiąż wartość --df: true (flaga bez argumentu) → poprzedni miesiąc kalendarzowy
-  let dateFrom: string | undefined;
-  if (options.dateFrom === true) {
-    dateFrom = getPreviousMonth();
-    logger.info(`Nie podano daty dla --df, używam poprzedniego miesiąca: ${dateFrom}`);
-  } else {
-    dateFrom = options.dateFrom;
-  }
+program
+  .name('ksef')
+  .description('CLI do pobierania faktur i generowania PDF z KSeF API 2.0')
+  .version('0.7.0', '-V, --version', 'wyświetla numer wersji')
+  .helpOption('-h, --help', 'wyświetla pomoc komendy')
+  .helpCommand(false)
+  .option('-v, --verbose', 'Tryb debug (szczegółowe logi)')
+  .exitOverride()
+  .configureOutput({
+    outputError: (): void => {},
+  })
+  .configureHelp({
+    subcommandTerm(cmd): string {
+      const args = cmd.registeredArguments
+        .map((arg) => {
+          const name = arg.name() + (arg.variadic === true ? '...' : '');
+          return arg.required ? `<${name}>` : `[${name}]`;
+        })
+        .join(' ');
+      const alias = cmd.aliases()[0] !== undefined ? `|${cmd.aliases()[0]}` : '';
+      const opts = cmd.options.length > 0 ? ' [opcje]' : '';
+      return cmd.name() + alias + opts + (args ? ` ${args}` : '');
+    },
+    formatHelp(cmd, helper): string {
+      const out: string = Help.prototype.formatHelp.call(this, cmd, helper);
+      return out
+        .replace(/^Usage:/m, 'Użycie:')
+        .replace(/^Arguments:/m, 'Argumenty:')
+        .replace(/^Options:/m, 'Opcje:')
+        .replace(/^Commands:/m, 'Komendy:')
+        .replace(/\[options\]/g, '[opcje]')
+        .replace(/\[command\]/g, '[komenda]');
+    },
+  });
 
-  const hasDateFrom = !!dateFrom;
-  const hasDateTo = !!options.dateTo;
-  const isMonthFormat = hasDateFrom && /^\d{4}-\d{2}$/.test(dateFrom!);
-
-  if (!hasDateFrom && hasDateTo) {
-    logger.error('Dla eksportu faktur musisz podać jednocześnie --df i --dt (zakres jednego miesiąca).');
-    process.exit(1);
-  }
-
-  if (hasDateFrom && !hasDateTo && !isMonthFormat) {
-    logger.error(
-      'Podano --df w formacie YYYY-MM-DD bez --dt. Użyj formatu YYYY-MM (np. --df 2026-02) aby pobrać cały miesiąc, lub dodaj --dt.',
-    );
-    process.exit(1);
-  }
-
-  if (isMonthFormat && !hasDateTo) {
-    const dateRange = parseMonthToDateRange(dateFrom!);
-    const fromStr = dateRange.from.toISOString().slice(0, 10);
-    const toStr = dateRange.to.toISOString().slice(0, 10);
-    logger.info(`Zakres dat (z miesiąca ${dateFrom}): ${fromStr} do ${toStr}`);
-    return dateRange;
-  }
-
-  if (hasDateFrom && hasDateTo) {
-    const dateRange = validateDateRange(dateFrom!, options.dateTo!);
-    logger.info(`Zakres dat: ${dateFrom} do ${options.dateTo}`);
-    return dateRange;
-  }
-
-  // Tryb testu autoryzacji — daty nie są wymagane
-  logger.info('Nie podano zakresu dat (tryb testu autoryzacji)');
-  return null;
-}
-
-/**
- * Obsługuje tryb generowania PDF i kończy proces.
- * @param {TCliOptions} options - Opcje CLI z Commander.js
- * @param {IConfig} config - Konfiguracja aplikacji
- * @returns {Promise<void>}
- */
-async function runPdfMode(options: TCliOptions, config: IConfig): Promise<void> {
-  logger.info('');
-  logger.info('=== GENEROWANIE PDF ===');
-
-  if (options.output) {
-    validatePath(options.output, '--output');
-  }
-  if (options.template) {
-    validatePath(options.template, '--template');
-  }
-  if (options.pdfOutput) {
-    validatePath(options.pdfOutput, '--pdf-output');
-  }
-
-  // Rozwiąż wartość --generate-pdf: true (flaga bez argumentu) → poprzedni miesiąc kalendarzowy
-  let pdfMonth: string;
-  if (options.generatePdf === true) {
-    pdfMonth = getPreviousMonth();
-    logger.info(`Nie podano miesiąca dla --generate-pdf, używam poprzedniego miesiąca: ${pdfMonth}`);
-  } else {
-    pdfMonth = options.generatePdf!;
-  }
-
-  const pdfOptions = {
-    month: pdfMonth,
-    outputDir: options.output || config.outputDir,
-    templatePath: options.template || config.templatePath || undefined,
-    pdfOutputDir: options.pdfOutput,
-    startDay: options.startDay !== undefined ? parseInt(options.startDay, 10) : undefined,
-    endDay: options.endDay !== undefined ? parseInt(options.endDay, 10) : undefined,
-  };
-
-  const stats = await generatePdfForMonth(pdfOptions);
-  process.exit(stats.failed > 0 ? 1 : 0);
-}
-
-/**
- * Obsługuje tryb pobierania faktur: autoryzacja i opcjonalny eksport.
- * @param {TCliOptions} options - Opcje CLI z Commander.js
- * @param {IConfig} config - Konfiguracja aplikacji
- * @param {TValidateDateRangeReturn | null} dateRange - Zakres dat lub null (tryb testu autoryzacji)
- * @returns {Promise<void>}
- */
-async function runFetchMode(
-  options: TCliOptions,
-  config: IConfig,
-  dateRange: TValidateDateRangeReturn | null,
-): Promise<void> {
-  const outputDir = options.output || config.outputDir;
-  if (options.output) {
-    validatePath(options.output, '--output');
-  }
-  logger.debug(`Katalog wyjściowy: ${outputDir}`);
-
-  logger.info('Sprawdzanie zapisanej sesji...');
-  let tokens = await getValidAccessToken(config);
-
-  if (!tokens) {
-    logger.info('Wymagana pełna autoryzacja');
-    tokens = await authenticate(config);
-    await saveTokens(tokens.accessToken, tokens.refreshToken, config);
-  }
-
-  logger.info('✓ Pomyślnie zautoryzowano w KSeF');
-
-  const accessTokenStr = tokens.accessToken;
-  if (accessTokenStr) {
-    logger.debug(`Token dostępu: ${maskSensitiveData(accessTokenStr)}`);
-  }
-
-  if (dateRange) {
-    logger.info('');
-    logger.info('=== POBIERANIE FAKTUR XML ===');
-    const exportResult = await runSingleExport({
-      config,
-      accessToken: accessTokenStr,
-      dateRange,
-      outputDir,
-      logger,
-    });
-
-    if (exportResult.noInvoices) {
-      logger.info('');
-      logger.info('Brak faktur w podanym zakresie dat; eksport zakończony bez błędu.');
-    } else if (exportResult.hadInvoices) {
-      logger.info('');
-      logger.info(`Pobrano ${exportResult.invoiceCount} faktur do katalogu ${exportResult.targetDir}.`);
-
-      if (exportResult.isTruncated) {
-        logger.warn('⚠ Dane mogą być niepełne (eksport obcięty) – wykonaj dodatkowe eksporty.');
-      }
-      if (exportResult.inconsistentMetadata) {
-        logger.warn('⚠ Wykryto niespójności w metadanych – sprawdź logi powyżej.');
-      }
-    }
-  } else {
-    logger.info('');
-    logger.info('=== TEST AUTORYZACJI ZAKOŃCZONY POMYŚLNIE ===');
-    logger.info('Token zapisany do przyszłego użycia.');
-    logger.info('Uruchom z parametrami --df i --dt aby pobrać faktury.');
-  }
-}
-
-/**
- * Główna funkcja aplikacji
- */
-async function main(): Promise<void> {
-  let exitCode = 0;
-
-  const program = new Command();
-
-  program
-    .name('ksef-invoice-fetcher')
-    .description('Aplikacja do pobierania faktur z KSeF API 2.0')
-    .version('0.6.0')
-    .option('--df, --date-from [date]', 'Data początkowa (format: YYYY-MM-DD lub YYYY-MM), domyślnie: poprzedni miesiąc')
-    .option('--dt, --date-to <date>', 'Data końcowa (format: YYYY-MM-DD)')
-    .option('-o, --output <dir>', 'Katalog wyjściowy (opcjonalny)')
-    .option('--generate-pdf [month]', 'Generuj PDF dla faktur z miesiąca (format: YYYY-MM), domyślnie: poprzedni miesiąc')
-    .option('--template <path>', 'Ścieżka do szablonu DOCX (opcjonalna)')
-    .option('--pdf-output <dir>', 'Katalog wyjściowy dla PDF (opcjonalny)')
-    .option('--start-day <day>', 'Dzień początkowy filtrowania (1-31)')
-    .option('--end-day <day>', 'Dzień końcowy filtrowania (1-31)');
-
-  program.parse(process.argv);
-
-  const options = program.opts<TCliOptions>();
-
-  try {
-    const config = getConfig();
-
-    validateConfig(config);
-
-    logger.info(`KSeF Invoice Fetcher v0.6.0`);
-    logger.info(`Środowisko: ${config.env}`);
-    logger.info(`API URL: ${config.baseUrl}`);
-
-    if (options.generatePdf) {
-      await runPdfMode(options, config);
+program
+  .command('help [komenda]')
+  .description('wyświetla pomoc dla komendy')
+  .action((cmdName: string | undefined): void => {
+    if (cmdName === undefined) {
+      program.outputHelp();
       return;
     }
+    const sub = program.commands.find((c) => c.name() === cmdName);
+    if (sub === undefined) {
+      throw new CommanderError(1, 'commander.unknownCommand', `error: unknown command '${cmdName}'`);
+    }
+    sub.outputHelp();
+  });
 
-    validateNIP(config.nip);
-    logger.debug(`NIP validated: ${maskSensitiveData(config.nip)}`);
+program
+  .command('init <nip> [env]')
+  .description('Inicjalizuje katalog .ksef/ (env: DEMO|TEST|PRD, domyślnie PRD)')
+  .action(async (nip: string, env: string | undefined) => initCmd(nip, env));
 
-    const dateRange = resolveDateRange(options);
-    await runFetchMode(options, config, dateRange);
+program
+  .command('login')
+  .description('Test autoryzacji w KSeF')
+  .action(async () => loginCmd(program.opts<TGlobalOpts>()));
 
-    logger.info('Zakończono');
-  } catch (err) {
+program
+  .command('fetch')
+  .description('Pobiera faktury XML z zakresu dat')
+  .requiredOption('--df <data>', 'Data od (YYYY-MM lub YYYY-MM-DD)')
+  .option('--dt <data>', 'Data do (YYYY-MM-DD)')
+  .action(async (opts: TFetchOpts) => fetchCmd(opts, program.opts<TGlobalOpts>()));
+
+program
+  .command('pdf [miesiąc]')
+  .description('Generuje PDF dla miesiąca YYYY-MM (domyślnie: poprzedni miesiąc)')
+  .option('--start-day <dzień>', 'Dzień początkowy (1-31)')
+  .option('--end-day <dzień>', 'Dzień końcowy (1-31)')
+  .action(async (month: string | undefined, opts: TPdfOpts) => pdfCmd(month, opts, program.opts<TGlobalOpts>()));
+
+program
+  .command('margin [minuty]')
+  .description('Pokaż/ustaw margines odświeżania tokenu JWT (minuty, 0-60)')
+  .action(async (minutes: string | undefined) => marginCmd(minutes));
+
+program
+  .command('interval [sekundy]')
+  .description('Pokaż/ustaw interwał pollingu eksportu (sekundy, 1-300)')
+  .action(async (seconds: string | undefined) => intervalCmd(seconds));
+
+try {
+  await program.parseAsync(process.argv);
+} catch (err) {
+  if (err instanceof CommanderError) {
+    if (err.code === 'commander.helpDisplayed' || err.code === 'commander.help' || err.code === 'commander.version') {
+      process.exitCode = err.exitCode;
+    } else {
+      logger.error(translateCommanderError(err));
+
+      const sub = SUBCOMMAND_HELP_ERROR_CODES.has(err.code) ? findInvokedSubcommand() : undefined;
+      if (sub !== undefined) {
+        process.stderr.write('\n');
+        sub.outputHelp({ error: true });
+      } else {
+        logger.info("Wpisz 'ksef --help' aby zobaczyć dostępne komendy i opcje.");
+      }
+
+      process.exitCode = err.exitCode || 1;
+    }
+  } else {
     const error = err as Error;
-    logger.error(`Error: ${error.message}`);
-
+    logger.error(`Błąd: ${error.message}`);
     if (error.stack) {
       logger.debug(error.stack);
     }
-
-    exitCode = 1;
-  } finally {
-    process.exit(exitCode);
+    process.exitCode = 1;
   }
 }
-
-// Uruchomienie aplikacji
-main().catch((reason) => {
-  logger.error(`Nieoczekiwany błąd: ${(reason as Error).message}`);
-  process.exit(1);
-});

@@ -39,20 +39,16 @@ vi.mock('../../utils/logger.ts', () => ({
 const MOCK_CONFIG = Object.freeze<IConfig>({
   env: 'TEST',
   baseUrl: 'https://api-test.ksef.mf.gov.pl',
-  certPath: '/certs/test.crt',
-  certKeyPath: '/certs/test.key',
-  certPassword: '',
-  tokenPath: '/tokens/ksef.token',
-  publicKeyPath: '/certs/public-key.pem',
+  tokenPath: '/.ksef/ksef.token',
+  publicKeyPath: '/.ksef/public-key.pem',
   nip: '1234567890',
-  outputDir: '/output',
-  tempDir: '/tmp',
-  templatePath: null,
-  tokenStoragePath: '/tokens/ksef-tokens.json',
+  xmlDir: '/xml',
+  pdfDir: '/pdf',
+  tempDir: '/.ksef/tmp',
+  tokenStoragePath: '/.ksef/tokens.json',
   tokenRefreshMarginMinutes: 2,
   exportPollIntervalSeconds: 5,
   exportStatusMaxWaitMinutes: 10,
-  libreOfficePath: null,
 });
 
 const MOCK_LOGGER: ILogger = {

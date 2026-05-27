@@ -23,7 +23,7 @@ Projekt integruje się z KSeF (Krajowy System e-Faktur) — system podatkowy Min
 - Obsługa tokenów uwierzytelniających KSeF (przechowywanie, szyfrowanie RSA-OAEP, odświeżanie)
 - Szyfrowanie AES-256-CBC pobranych paczek z fakturami
 - Walidacja i maskowanie danych wrażliwych w logach (NIP, tokeny)
-- Bezpieczeństwo pliku `.env` z danymi dostępowymi
+- Bezpieczeństwo katalogu `.ksef/` w katalogu klienta (token KSeF, cache JWT, klucz publiczny)
 
 ## Czego nie zgłaszać
 

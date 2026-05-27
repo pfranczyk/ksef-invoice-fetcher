@@ -9,15 +9,11 @@ import { generatePdfForMonth } from '../pdf-generator.ts';
 const mockFns = vi.hoisted(() => ({
   parseInvoiceXml: vi.fn(),
   mapInvoiceData: vi.fn(),
-  processTemplate: vi.fn(),
-  validateTemplate: vi.fn(),
-  convertDocxToPdf: vi.fn(),
+  buildInvoicePdfDocDefinition: vi.fn(),
+  writePdfToFile: vi.fn(),
   createDirectory: vi.fn(),
-  deleteFile: vi.fn(),
   fileExists: vi.fn(),
   readFile: vi.fn(),
-  readdir: vi.fn(),
-  rmdir: vi.fn(),
 }));
 
 vi.mock('../xml-parser.ts', () => ({
@@ -25,26 +21,22 @@ vi.mock('../xml-parser.ts', () => ({
   mapInvoiceData: mockFns.mapInvoiceData,
 }));
 
-vi.mock('../template-processor.ts', () => ({
-  processTemplate: mockFns.processTemplate,
-  validateTemplate: mockFns.validateTemplate,
+vi.mock('../pdf-template.ts', () => ({
+  buildInvoicePdfDocDefinition: mockFns.buildInvoicePdfDocDefinition,
 }));
 
-vi.mock('../docx-to-pdf.ts', () => ({
-  convertDocxToPdf: mockFns.convertDocxToPdf,
+vi.mock('../pdf-writer.ts', () => ({
+  writePdfToFile: mockFns.writePdfToFile,
 }));
 
 vi.mock('../../utils/file-system.ts', () => ({
   createDirectory: mockFns.createDirectory,
-  deleteFile: mockFns.deleteFile,
   fileExists: mockFns.fileExists,
 }));
 
 vi.mock('fs', () => ({
   promises: {
     readFile: mockFns.readFile,
-    readdir: mockFns.readdir,
-    rmdir: mockFns.rmdir,
   },
 }));
 
@@ -59,8 +51,8 @@ vi.mock('../../utils/logger.ts', () => ({
 
 const BASE_OPTIONS = {
   month: '2026-01',
-  outputDir: '/output',
-  templatePath: '/templates/invoice.docx',
+  xmlDir: '/xml',
+  pdfDir: '/pdf',
 };
 
 /**
@@ -76,15 +68,11 @@ function makeMetadata(invoices: Array<{ ksefNumber: string; issueDate: string }>
 function setupHappyPath(invoices: Array<{ ksefNumber: string; issueDate: string }>): void {
   mockFns.fileExists.mockResolvedValue(true);
   mockFns.createDirectory.mockResolvedValue(undefined);
-  mockFns.validateTemplate.mockResolvedValue(true);
   mockFns.readFile.mockResolvedValue(makeMetadata(invoices));
   mockFns.parseInvoiceXml.mockResolvedValue({ Faktura: {} });
   mockFns.mapInvoiceData.mockReturnValue({ numerFaktury: 'FV/001', pozycje: [] });
-  mockFns.processTemplate.mockResolvedValue(undefined);
-  mockFns.convertDocxToPdf.mockResolvedValue(undefined);
-  mockFns.deleteFile.mockResolvedValue(undefined);
-  mockFns.readdir.mockResolvedValue([]);
-  mockFns.rmdir.mockResolvedValue(undefined);
+  mockFns.buildInvoicePdfDocDefinition.mockReturnValue({ content: [] });
+  mockFns.writePdfToFile.mockResolvedValue(undefined);
 }
 
 beforeEach(() => {
@@ -109,16 +97,17 @@ describe('generatePdfForMonth', () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  it('powinien wywołać parseInvoiceXml i processTemplate dla każdej faktury', async () => {
+  it('powinien wywołać parseInvoiceXml, buildInvoicePdfDocDefinition i writePdfToFile dla każdej faktury', async () => {
     const invoices = [{ ksefNumber: 'KSEF001', issueDate: '2026-01-15' }];
     setupHappyPath(invoices);
 
     await generatePdfForMonth(BASE_OPTIONS);
 
-    const monthDir = join('/output', '01');
-    expect(mockFns.parseInvoiceXml).toHaveBeenCalledWith(join(monthDir, 'KSEF001.xml'));
-    expect(mockFns.processTemplate).toHaveBeenCalledOnce();
-    expect(mockFns.convertDocxToPdf).toHaveBeenCalledOnce();
+    const xmlMonthDir = join('/xml', '01');
+    const pdfMonthDir = join('/pdf', '01');
+    expect(mockFns.parseInvoiceXml).toHaveBeenCalledWith(join(xmlMonthDir, 'KSEF001.xml'));
+    expect(mockFns.buildInvoicePdfDocDefinition).toHaveBeenCalledOnce();
+    expect(mockFns.writePdfToFile).toHaveBeenCalledWith({ content: [] }, join(pdfMonthDir, 'KSEF001.pdf'));
   });
 
   it('powinien przefiltrować faktury według startDay i endDay', async () => {
@@ -141,14 +130,14 @@ describe('generatePdfForMonth', () => {
     expect(calledXmlPath).toContain('KSEF005');
   });
 
-  it('powinien zwrócić stats failed=1 gdy processTemplate rzuci błąd i nie przerywać', async () => {
+  it('powinien zwrócić stats failed=1 gdy writePdfToFile rzuci błąd i nie przerywać', async () => {
     const invoices = [
       { ksefNumber: 'KSEF001', issueDate: '2026-01-01' },
       { ksefNumber: 'KSEF002', issueDate: '2026-01-02' },
     ];
     setupHappyPath(invoices);
     // Pierwsza faktura rzuca błąd, druga przechodzi normalnie
-    mockFns.processTemplate.mockRejectedValueOnce(new Error('Błąd szablonu')).mockResolvedValueOnce(undefined);
+    mockFns.writePdfToFile.mockRejectedValueOnce(new Error('Błąd zapisu PDF')).mockResolvedValueOnce(undefined);
 
     const result = await generatePdfForMonth(BASE_OPTIONS);
 
@@ -156,15 +145,14 @@ describe('generatePdfForMonth', () => {
     expect(result.success).toBe(1);
     expect(result.failed).toBe(1);
     expect(result.errors[0].file).toBe('KSEF001');
-    expect(result.errors[0].error).toBe('Błąd szablonu');
+    expect(result.errors[0].error).toBe('Błąd zapisu PDF');
   });
 
   it('powinien zwiększyć skipped gdy plik XML faktury nie istnieje', async () => {
     const invoices = [{ ksefNumber: 'KSEF999', issueDate: '2026-01-10' }];
     setupHappyPath(invoices);
-    // Drugi wywołanie fileExists (dla xmlPath) zwraca false
     mockFns.fileExists
-      .mockResolvedValueOnce(true) // monthDir istnieje
+      .mockResolvedValueOnce(true) // xmlMonthDir istnieje
       .mockResolvedValueOnce(true) // metadataPath istnieje
       .mockResolvedValueOnce(false); // xmlPath nie istnieje
 
@@ -173,7 +161,7 @@ describe('generatePdfForMonth', () => {
     expect(result.total).toBe(1);
     expect(result.skipped).toBe(1);
     expect(result.success).toBe(0);
-    expect(mockFns.processTemplate).not.toHaveBeenCalled();
+    expect(mockFns.buildInvoicePdfDocDefinition).not.toHaveBeenCalled();
   });
 
   it('powinien rzucić błąd gdy format miesiąca jest nieprawidłowy', async () => {
@@ -195,20 +183,10 @@ describe('generatePdfForMonth', () => {
   });
 
   it('powinien rzucić błąd gdy katalog faktur nie istnieje', async () => {
-    mockFns.fileExists.mockResolvedValue(false); // katalog nie istnieje
+    mockFns.fileExists.mockResolvedValue(false);
 
-    const monthDir = join('/output', '01');
-    await expect(generatePdfForMonth(BASE_OPTIONS)).rejects.toThrow(`Nie znaleziono katalogu faktur: ${monthDir}`);
-  });
-
-  it('powinien rzucić błąd gdy szablon nie jest prawidłowy', async () => {
-    mockFns.fileExists.mockResolvedValue(true);
-    mockFns.createDirectory.mockResolvedValue(undefined);
-    mockFns.validateTemplate.mockResolvedValue(false); // nieprawidłowy szablon
-
-    await expect(generatePdfForMonth(BASE_OPTIONS)).rejects.toThrow(
-      'Nieprawidłowy lub uszkodzony plik szablonu: /templates/invoice.docx',
-    );
+    const xmlMonthDir = join('/xml', '01');
+    await expect(generatePdfForMonth(BASE_OPTIONS)).rejects.toThrow(`Nie znaleziono katalogu faktur: ${xmlMonthDir}`);
   });
 
   it('powinien zwrócić pusty wynik gdy brak faktur po filtrowaniu', async () => {
@@ -225,6 +203,6 @@ describe('generatePdfForMonth', () => {
 
     expect(result.total).toBe(0);
     expect(result.success).toBe(0);
-    expect(mockFns.processTemplate).not.toHaveBeenCalled();
+    expect(mockFns.buildInvoicePdfDocDefinition).not.toHaveBeenCalled();
   });
 });

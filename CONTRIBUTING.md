@@ -2,18 +2,25 @@
 
 ## Wymagania środowiska
 
-- Node.js 20+
-- LibreOffice 7.x+
+- Node.js 24+
 - Dostęp do KSeF
 
 ## Pierwsze kroki
 
 ```bash
-git clone https://github.com/<user>/ksef-invoice-fetcher.git
+git clone https://github.com/pfranczyk/ksef-invoice-fetcher.git
 cd ksef-invoice-fetcher
 npm install
-cp .env.example .env
-# Uzupełnij .env własnymi danymi
+npm run build              # tsup → dist/index.js
+```
+
+Do uruchomienia CLI na własnym kliencie testowym wejdź do osobnego katalogu
+(np. `D:\temp\ksef-test`) i wykonaj:
+
+```bash
+node /ścieżka/do/repo/dist/index.js init 0000000000 DEMO
+# Następnie wklej token KSeF do .ksef/ksef.token i uruchom:
+node /ścieżka/do/repo/dist/index.js login
 ```
 
 ## Komendy
@@ -22,15 +29,19 @@ cp .env.example .env
 npm test              # uruchom wszystkie testy
 npm run test:watch    # tryb watch
 npm run test:coverage # raport pokrycia
-npx tsc --noEmit      # sprawdzenie typów (brak kroku budowania)
+npm run typecheck     # tsc --noEmit (jedyna bramka typów — esbuild nie typecheckuje)
+npm run lint          # biome check src/
+npm run build         # tsup → dist/index.js
 ```
 
 ## Standardy kodu
 
 Projekt używa TypeScript w trybie strict. Przed wysłaniem PR upewnij się że:
 
-- `npx tsc --noEmit` nie zwraca błędów
+- `npm run typecheck` nie zwraca błędów
+- `npm run lint` przechodzi (biome; repo używa LF — patrz `.gitattributes`)
 - `npm test` — wszystkie testy przechodzą
+- `npm run build` przechodzi (tsup)
 - Importy używają rozszerzenia `.ts` (nie `.js`)
 - Stałe definiowane przez `Object.freeze<T>({...})` — bez `as const`
 - Typy: prefix `T` dla aliasów, prefix `I` dla interfejsów API

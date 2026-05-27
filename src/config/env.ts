@@ -1,19 +1,11 @@
 /**
- * Wczytywanie konfiguracji z pliku .env
+ * Wczytywanie konfiguracji z pliku `.ksef/config.json` w bieżącym katalogu roboczym.
  */
 
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config } from 'dotenv';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { IConfig, TApiUrls, TEnvironment } from '../types.ts';
 import { validateNIP, validatePath, validateURL } from '../utils/validator.ts';
-
-const __filename: string = fileURLToPath(import.meta.url);
-const __dirname: string = dirname(__filename);
-
-// Wczytaj .env z katalogu głównego projektu
-config({ path: resolve(__dirname, '../../.env'), debug: false });
 
 /**
  * Dozwolone wartości środowiska KSeF
@@ -30,57 +22,129 @@ const API_URLS = Object.freeze<TApiUrls>({
 });
 
 /**
- * Pobiera konfigurację aplikacji z zmiennych środowiskowych
+ * Domyślne wartości pól numerycznych w `.ksef/config.json` (gdy pominięte).
+ */
+type TConfigDefaults = {
+  readonly TOKEN_REFRESH_MARGIN_MINUTES: number;
+  readonly EXPORT_POLL_INTERVAL_SECONDS: number;
+  readonly EXPORT_STATUS_MAX_WAIT_MINUTES: number;
+};
+
+export const CONFIG_DEFAULTS = Object.freeze<TConfigDefaults>({
+  TOKEN_REFRESH_MARGIN_MINUTES: 5,
+  EXPORT_POLL_INTERVAL_SECONDS: 5,
+  EXPORT_STATUS_MAX_WAIT_MINUTES: 0,
+});
+
+/**
+ * Struktura pliku `.ksef/config.json`
+ */
+export interface IKsefConfigFile {
+  nip: string;
+  environment: TEnvironment;
+  tokenRefreshMarginMinutes?: number;
+  exportPollIntervalSeconds?: number;
+  exportStatusMaxWaitMinutes?: number;
+}
+
+/**
+ * Zwraca ścieżkę do katalogu `.ksef/` w bieżącym katalogu roboczym.
+ * @returns {string} Absolutna ścieżka do `<cwd>/.ksef`
+ */
+export function getKsefDir(): string {
+  return resolve(process.cwd(), '.ksef');
+}
+
+/**
+ * Zwraca ścieżkę do pliku konfiguracyjnego `.ksef/config.json`.
+ * @returns {string} Absolutna ścieżka do pliku
+ */
+export function getKsefConfigPath(): string {
+  return resolve(getKsefDir(), 'config.json');
+}
+
+/**
+ * Wczytuje i waliduje surową zawartość `.ksef/config.json`.
+ * @returns {IKsefConfigFile} Sparsowana zawartość pliku konfiguracyjnego
+ * @throws {Error} Gdy brak pliku, niepoprawny JSON lub brakujące/niepoprawne wymagane pola
+ */
+export function readKsefConfigFile(): IKsefConfigFile {
+  const configPath = getKsefConfigPath();
+
+  if (!existsSync(configPath)) {
+    throw new Error('Brak konfiguracji KSeF w bieżącym katalogu. Uruchom `ksef init <nip> [env]` aby ją utworzyć.');
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, 'utf-8');
+  } catch (error) {
+    throw new Error(`Nie udało się odczytać ${configPath}: ${(error as Error).message}`);
+  }
+
+  let parsed: IKsefConfigFile;
+  try {
+    parsed = JSON.parse(raw) as IKsefConfigFile;
+  } catch (error) {
+    throw new Error(`Niepoprawny JSON w ${configPath}: ${(error as Error).message}`);
+  }
+
+  if (!parsed.nip) {
+    throw new Error(`Brak pola "nip" w ${configPath}. Uruchom ponownie \`ksef init <nip>\`.`);
+  }
+
+  if (!parsed.environment) {
+    throw new Error(`Brak pola "environment" w ${configPath}. Dozwolone: DEMO, TEST, PRD.`);
+  }
+
+  if (!VALID_ENVIRONMENTS.includes(parsed.environment)) {
+    throw new Error(
+      `Niepoprawna wartość "environment" w ${configPath}: ${parsed.environment}. Dozwolone: DEMO, TEST, PRD.`,
+    );
+  }
+
+  return parsed;
+}
+
+/**
+ * Zapisuje obiekt konfiguracji do `.ksef/config.json`. Tworzy katalog `.ksef/` jeśli nie istnieje.
+ * @param {IKsefConfigFile} data - Zawartość pliku konfiguracyjnego
+ * @throws {Error} Gdy nie udało się utworzyć katalogu lub zapisać pliku
+ */
+export function writeKsefConfigFile(data: IKsefConfigFile): void {
+  const ksefDir = getKsefDir();
+  mkdirSync(ksefDir, { recursive: true });
+  const content = `${JSON.stringify(data, null, 2)}\n`;
+  writeFileSync(getKsefConfigPath(), content, 'utf-8');
+}
+
+/**
+ * Pobiera konfigurację aplikacji z pliku `.ksef/config.json` i rozwija ją do pełnego IConfig.
  * @returns {IConfig} Obiekt konfiguracji
- * @throws {Error} Jeśli KSEF_ENV nie jest ustawiony
+ * @throws {Error} Gdy brak pliku konfiguracyjnego, niepoprawny JSON lub brakujące wymagane pola.
  */
 export function getConfig(): IConfig {
-  const envValue: string | undefined = process.env.KSEF_ENV;
-
-  if (!envValue) {
-    throw new Error('KSEF_ENV jest wymagany. Ustaw zmienną środowiskową KSEF_ENV na jedną z wartości: DEMO, TEST, PRD');
-  }
-
-  if (!['DEMO', 'TEST', 'PRD'].includes(envValue)) {
-    throw new Error(`KSEF_ENV musi być jednym z: DEMO, TEST, PRD (otrzymano: ${envValue})`);
-  }
-
-  const env: TEnvironment = envValue as TEnvironment;
+  const parsed = readKsefConfigFile();
+  const env: TEnvironment = parsed.environment;
+  const ksefDir = getKsefDir();
 
   return {
-    // Środowisko KSeF
     env,
     baseUrl: API_URLS[env],
 
-    // Ścieżki certyfikatów i tokenów
-    certPath: process.env.CERT_PATH || './certs/ksef.crt',
-    certKeyPath: process.env.CERT_KEY_PATH || './certs/ksef.key',
-    certPassword: process.env.CERT_PASSWORD || '',
-    tokenPath: process.env.TOKEN_PATH || './certs/ksef.token',
+    tokenPath: resolve(ksefDir, 'ksef.token'),
+    publicKeyPath: resolve(ksefDir, 'public-key.pem'),
+    tokenStoragePath: resolve(ksefDir, 'tokens.json'),
+    tempDir: resolve(ksefDir, 'tmp'),
 
-    // Klucz publiczny KSeF
-    publicKeyPath: process.env.KSEF_PUBLIC_KEY_PATH || './certs/ksef-public.pem',
+    nip: parsed.nip,
 
-    // NIP
-    nip: process.env.NIP || '',
+    xmlDir: resolve(process.cwd(), 'xml'),
+    pdfDir: resolve(process.cwd(), 'pdf'),
 
-    // Katalogi
-    outputDir: process.env.OUTPUT_DIR || './output',
-    tempDir: process.env.TEMP_DIR || './tmp',
-
-    // Szablon DOCX
-    templatePath: process.env.TEMPLATE_DOCX || null,
-
-    // Przechowywanie tokenów
-    tokenStoragePath: process.env.TOKEN_STORAGE_PATH || './tokens/ksef-tokens.json',
-    tokenRefreshMarginMinutes: parseInt(process.env.TOKEN_REFRESH_MARGIN_MINUTES || '5', 10) || 5,
-
-    // Eksport faktur
-    exportPollIntervalSeconds: parseInt(process.env.EXPORT_POLL_INTERVAL_SECONDS || '5', 10) || 5,
-    exportStatusMaxWaitMinutes: parseInt(process.env.EXPORT_STATUS_MAX_WAIT_MINUTES || '0', 10) || 0,
-
-    // LibreOffice - konwersja DOCX do PDF
-    libreOfficePath: process.env.LIBREOFFICE_PATH || null,
+    tokenRefreshMarginMinutes: parsed.tokenRefreshMarginMinutes ?? CONFIG_DEFAULTS.TOKEN_REFRESH_MARGIN_MINUTES,
+    exportPollIntervalSeconds: parsed.exportPollIntervalSeconds ?? CONFIG_DEFAULTS.EXPORT_POLL_INTERVAL_SECONDS,
+    exportStatusMaxWaitMinutes: parsed.exportStatusMaxWaitMinutes ?? CONFIG_DEFAULTS.EXPORT_STATUS_MAX_WAIT_MINUTES,
   };
 }
 
@@ -94,28 +158,24 @@ export function getApiUrl(env: TEnvironment): string {
 }
 
 /**
- * Waliduje konfigurację aplikacji
- * Sprawdza czy wszystkie wymagane zmienne są ustawione i poprawne
+ * Waliduje konfigurację aplikacji: środowisko, URL, NIP, ścieżki (path traversal) oraz zakresy parametrów.
  * @param {IConfig} config - Obiekt konfiguracji z getConfig()
- * @throws {Error} Jeśli konfiguracja jest niepoprawna
  * @returns {boolean} True jeśli konfiguracja jest poprawna
+ * @throws {Error} Gdy konfiguracja jest niepoprawna
  */
 export function validateConfig(config: IConfig): boolean {
   const errors: string[] = [];
 
-  // Walidacja środowiska
   if (!VALID_ENVIRONMENTS.includes(config.env)) {
-    errors.push(`KSEF_ENV musi być jednym z: DEMO, TEST, PRD (otrzymano: ${config.env})`);
+    errors.push(`environment musi być jednym z: DEMO, TEST, PRD (otrzymano: ${config.env})`);
   }
 
-  // Walidacja URL
   try {
     validateURL(config.baseUrl, 'baseUrl');
   } catch (error) {
     errors.push((error as Error).message);
   }
 
-  // Walidacja NIP (tylko jeśli ustawiony)
   if (config.nip) {
     try {
       validateNIP(config.nip);
@@ -123,18 +183,16 @@ export function validateConfig(config: IConfig): boolean {
       errors.push(`NIP: ${(error as Error).message}`);
     }
   } else {
-    errors.push('NIP jest wymagany (zmienna NIP lub --nip)');
+    errors.push('NIP jest wymagany w .ksef/config.json');
   }
 
-  // Walidacja ścieżek - sprawdzenie path traversal
   const pathsToValidate: Array<{ path: string; name: string }> = [
-    { path: config.certPath, name: 'CERT_PATH' },
-    { path: config.certKeyPath, name: 'CERT_KEY_PATH' },
-    { path: config.tokenPath, name: 'TOKEN_PATH' },
-    { path: config.publicKeyPath, name: 'KSEF_PUBLIC_KEY_PATH' },
-    { path: config.outputDir, name: 'OUTPUT_DIR' },
-    { path: config.tempDir, name: 'TEMP_DIR' },
-    { path: config.tokenStoragePath, name: 'TOKEN_STORAGE_PATH' },
+    { path: config.tokenPath, name: 'tokenPath' },
+    { path: config.publicKeyPath, name: 'publicKeyPath' },
+    { path: config.xmlDir, name: 'xmlDir' },
+    { path: config.pdfDir, name: 'pdfDir' },
+    { path: config.tempDir, name: 'tempDir' },
+    { path: config.tokenStoragePath, name: 'tokenStoragePath' },
   ];
 
   for (const { path, name } of pathsToValidate) {
@@ -145,31 +203,18 @@ export function validateConfig(config: IConfig): boolean {
     }
   }
 
-  // Walidacja istnienia krytycznych plików przy starcie
-  const requiredFiles: Array<{ path: string; name: string }> = [
-    { path: config.tokenPath, name: 'TOKEN_PATH (plik z tokenem KSeF)' },
-  ];
-
-  for (const { path, name } of requiredFiles) {
-    if (!existsSync(path)) {
-      errors.push(`Wymagany plik nie istnieje: ${name} (${path})`);
-    }
-  }
-
-  // Walidacja zakresów liczbowych
   if (config.tokenRefreshMarginMinutes < 0 || config.tokenRefreshMarginMinutes > 60) {
-    errors.push('TOKEN_REFRESH_MARGIN_MINUTES musi być w zakresie 0-60');
+    errors.push('tokenRefreshMarginMinutes musi być w zakresie 0-60');
   }
 
   if (config.exportPollIntervalSeconds < 1 || config.exportPollIntervalSeconds > 300) {
-    errors.push('EXPORT_POLL_INTERVAL_SECONDS musi być w zakresie 1-300');
+    errors.push('exportPollIntervalSeconds musi być w zakresie 1-300');
   }
 
   if (config.exportStatusMaxWaitMinutes < 0) {
-    errors.push('EXPORT_STATUS_MAX_WAIT_MINUTES nie może być ujemny');
+    errors.push('exportStatusMaxWaitMinutes nie może być ujemny');
   }
 
-  // Jeśli są błędy, rzuć wyjątek
   if (errors.length > 0) {
     throw new Error(
       `Błędy walidacji konfiguracji:\n${errors.map((err: string, idx: number) => `  ${idx + 1}. ${err}`).join('\n')}`,

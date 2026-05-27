@@ -1,52 +1,63 @@
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IConfig } from '../../types.ts';
-import { getApiUrl, getConfig, validateConfig } from '../env.ts';
+import {
+  getApiUrl,
+  getConfig,
+  getKsefConfigPath,
+  getKsefDir,
+  type IKsefConfigFile,
+  readKsefConfigFile,
+  validateConfig,
+  writeKsefConfigFile,
+} from '../env.ts';
 
 // --------------------------------------------------------------------------
 // Mocki
 // --------------------------------------------------------------------------
 
-// Zapobiegamy wczytywaniu pliku .env w module
-vi.mock('dotenv', () => ({
-  config: vi.fn(),
-}));
+const mockExistsSync = vi.hoisted(() => vi.fn());
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+const mockWriteFileSync = vi.hoisted(() => vi.fn());
+const mockMkdirSync = vi.hoisted(() => vi.fn());
 
-// existsSync używane w validateConfig do sprawdzenia wymaganych plików
-const mockExistsSync = vi.hoisted(() => vi.fn().mockReturnValue(true));
-vi.mock('fs', () => ({
+vi.mock('node:fs', () => ({
   existsSync: mockExistsSync,
+  readFileSync: mockReadFileSync,
+  writeFileSync: mockWriteFileSync,
+  mkdirSync: mockMkdirSync,
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExistsSync.mockReturnValue(true);
 });
 
 afterEach(() => {
-  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 // --------------------------------------------------------------------------
 // Stałe testowe
 // --------------------------------------------------------------------------
 
+const VALID_CONFIG_FILE = Object.freeze<IKsefConfigFile>({
+  nip: '5252674798',
+  environment: 'TEST',
+});
+
 const VALID_CONFIG = Object.freeze<IConfig>({
   env: 'TEST',
   baseUrl: 'https://api-test.ksef.mf.gov.pl',
-  certPath: '/certs/test.crt',
-  certKeyPath: '/certs/test.key',
-  certPassword: '',
-  tokenPath: '/tokens/ksef.token',
-  publicKeyPath: '/certs/public-key.pem',
-  nip: '5252674798', // poprawna suma kontrolna NIP
-  outputDir: '/output',
-  tempDir: '/tmp',
-  templatePath: null,
-  tokenStoragePath: '/tokens/ksef-tokens.json',
+  tokenPath: '/.ksef/ksef.token',
+  publicKeyPath: '/.ksef/public-key.pem',
+  nip: '5252674798',
+  xmlDir: '/xml',
+  pdfDir: '/pdf',
+  tempDir: '/.ksef/tmp',
+  tokenStoragePath: '/.ksef/tokens.json',
   tokenRefreshMarginMinutes: 5,
   exportPollIntervalSeconds: 5,
   exportStatusMaxWaitMinutes: 10,
-  libreOfficePath: null,
 });
 
 // --------------------------------------------------------------------------
@@ -68,44 +79,126 @@ describe('getApiUrl', () => {
 });
 
 // --------------------------------------------------------------------------
+// getKsefDir / getKsefConfigPath
+// --------------------------------------------------------------------------
+
+describe('getKsefDir', () => {
+  it('powinien zwrócić ścieżkę do .ksef/ w bieżącym katalogu roboczym', () => {
+    expect(getKsefDir()).toBe(resolve(process.cwd(), '.ksef'));
+  });
+});
+
+describe('getKsefConfigPath', () => {
+  it('powinien zwrócić ścieżkę do .ksef/config.json', () => {
+    expect(getKsefConfigPath()).toBe(resolve(process.cwd(), '.ksef', 'config.json'));
+  });
+});
+
+// --------------------------------------------------------------------------
+// readKsefConfigFile
+// --------------------------------------------------------------------------
+
+describe('readKsefConfigFile', () => {
+  it('powinien zwrócić sparsowaną zawartość pliku gdy JSON jest poprawny', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify(VALID_CONFIG_FILE));
+
+    expect(readKsefConfigFile()).toEqual(VALID_CONFIG_FILE);
+  });
+
+  it('powinien rzucić błąd gdy plik nie istnieje', () => {
+    mockExistsSync.mockReturnValue(false);
+
+    expect(() => readKsefConfigFile()).toThrow('Brak konfiguracji KSeF');
+  });
+
+  it('powinien rzucić błąd gdy JSON jest niepoprawny', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('{not json');
+
+    expect(() => readKsefConfigFile()).toThrow('Niepoprawny JSON');
+  });
+
+  it('powinien rzucić błąd gdy brak pola "nip"', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ environment: 'TEST' }));
+
+    expect(() => readKsefConfigFile()).toThrow('Brak pola "nip"');
+  });
+
+  it('powinien rzucić błąd gdy brak pola "environment"', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ nip: '5252674798' }));
+
+    expect(() => readKsefConfigFile()).toThrow('Brak pola "environment"');
+  });
+
+  it('powinien rzucić błąd gdy wartość "environment" jest niepoprawna', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ nip: '5252674798', environment: 'STAGING' }));
+
+    expect(() => readKsefConfigFile()).toThrow('Niepoprawna wartość "environment"');
+  });
+});
+
+// --------------------------------------------------------------------------
+// writeKsefConfigFile
+// --------------------------------------------------------------------------
+
+describe('writeKsefConfigFile', () => {
+  it('powinien utworzyć katalog .ksef/ i zapisać plik z zawartością JSON', () => {
+    writeKsefConfigFile(VALID_CONFIG_FILE);
+
+    expect(mockMkdirSync).toHaveBeenCalledWith(resolve(process.cwd(), '.ksef'), { recursive: true });
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      resolve(process.cwd(), '.ksef', 'config.json'),
+      `${JSON.stringify(VALID_CONFIG_FILE, null, 2)}\n`,
+      'utf-8',
+    );
+  });
+});
+
+// --------------------------------------------------------------------------
 // getConfig
 // --------------------------------------------------------------------------
 
 describe('getConfig', () => {
-  it('powinien zwrócić poprawny IConfig gdy KSEF_ENV i NIP są ustawione', () => {
-    vi.stubEnv('KSEF_ENV', 'TEST');
-    vi.stubEnv('NIP', '5252674798');
+  it('powinien zwrócić IConfig z domyślnymi parametrami numerycznymi', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify(VALID_CONFIG_FILE));
 
     const result = getConfig();
 
     expect(result.env).toBe('TEST');
     expect(result.baseUrl).toBe('https://api-test.ksef.mf.gov.pl');
     expect(result.nip).toBe('5252674798');
+    expect(result.tokenRefreshMarginMinutes).toBe(5);
+    expect(result.exportPollIntervalSeconds).toBe(5);
+    expect(result.exportStatusMaxWaitMinutes).toBe(0);
+    expect(result.tokenPath).toBe(resolve(process.cwd(), '.ksef', 'ksef.token'));
+    expect(result.publicKeyPath).toBe(resolve(process.cwd(), '.ksef', 'public-key.pem'));
+    expect(result.tokenStoragePath).toBe(resolve(process.cwd(), '.ksef', 'tokens.json'));
+    expect(result.tempDir).toBe(resolve(process.cwd(), '.ksef', 'tmp'));
+    expect(result.xmlDir).toBe(resolve(process.cwd(), 'xml'));
+    expect(result.pdfDir).toBe(resolve(process.cwd(), 'pdf'));
   });
 
-  it('powinien rzucić błąd gdy KSEF_ENV nie jest ustawiony', () => {
-    vi.stubEnv('KSEF_ENV', '');
-
-    expect(() => getConfig()).toThrow('KSEF_ENV jest wymagany');
-  });
-
-  it('powinien rzucić błąd gdy KSEF_ENV ma nieprawidłową wartość', () => {
-    vi.stubEnv('KSEF_ENV', 'STAGING');
-
-    expect(() => getConfig()).toThrow('KSEF_ENV musi być jednym z: DEMO, TEST, PRD');
-  });
-
-  it('powinien użyć wartości domyślnych gdy opcjonalne zmienne środowiskowe nie są ustawione', () => {
-    vi.stubEnv('KSEF_ENV', 'PRD');
-    vi.stubEnv('CERT_PATH', '');
-    vi.stubEnv('TOKEN_REFRESH_MARGIN_MINUTES', '');
-    vi.stubEnv('LIBREOFFICE_PATH', '');
+  it('powinien honorować parametry numeryczne nadpisane w pliku konfiguracyjnym', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        ...VALID_CONFIG_FILE,
+        tokenRefreshMarginMinutes: 15,
+        exportPollIntervalSeconds: 10,
+        exportStatusMaxWaitMinutes: 30,
+      }),
+    );
 
     const result = getConfig();
 
-    expect(result.certPath).toBe('./certs/ksef.crt');
-    expect(result.tokenRefreshMarginMinutes).toBe(5);
-    expect(result.libreOfficePath).toBeNull();
+    expect(result.tokenRefreshMarginMinutes).toBe(15);
+    expect(result.exportPollIntervalSeconds).toBe(10);
+    expect(result.exportStatusMaxWaitMinutes).toBe(30);
   });
 });
 
@@ -118,33 +211,33 @@ describe('validateConfig', () => {
     expect(validateConfig(VALID_CONFIG)).toBe(true);
   });
 
-  it('powinien rzucić błąd gdy ścieżka certyfikatu zawiera path traversal (../)', () => {
-    const config = { ...VALID_CONFIG, certPath: '../secret/cert.crt' };
-
-    expect(() => validateConfig(config)).toThrow('Błędy walidacji konfiguracji');
-  });
-
   it('powinien rzucić błąd gdy NIP jest pusty', () => {
-    const config = { ...VALID_CONFIG, nip: '' };
-
-    expect(() => validateConfig(config)).toThrow('NIP jest wymagany');
+    expect(() => validateConfig({ ...VALID_CONFIG, nip: '' })).toThrow('NIP jest wymagany');
   });
 
-  it('powinien rzucić błąd gdy TOKEN_REFRESH_MARGIN_MINUTES jest poza zakresem 0-60', () => {
-    const config = { ...VALID_CONFIG, tokenRefreshMarginMinutes: 100 };
-
-    expect(() => validateConfig(config)).toThrow('TOKEN_REFRESH_MARGIN_MINUTES musi być w zakresie 0-60');
+  it('powinien rzucić błąd gdy NIP ma błędną sumę kontrolną', () => {
+    expect(() => validateConfig({ ...VALID_CONFIG, nip: '5252674799' })).toThrow('Nieprawidłowa suma kontrolna');
   });
 
-  it('powinien rzucić błąd gdy EXPORT_POLL_INTERVAL_SECONDS jest poza zakresem 1-300', () => {
-    const config = { ...VALID_CONFIG, exportPollIntervalSeconds: 0 };
-
-    expect(() => validateConfig(config)).toThrow('EXPORT_POLL_INTERVAL_SECONDS musi być w zakresie 1-300');
+  it('powinien rzucić błąd gdy ścieżka katalogu XML zawiera path traversal (../)', () => {
+    expect(() => validateConfig({ ...VALID_CONFIG, xmlDir: '../secret' })).toThrow('Błędy walidacji');
   });
 
-  it('powinien rzucić błąd gdy plik tokenPath nie istnieje na dysku', () => {
-    mockExistsSync.mockReturnValue(false);
+  it('powinien rzucić błąd gdy tokenRefreshMarginMinutes jest poza zakresem 0-60', () => {
+    expect(() => validateConfig({ ...VALID_CONFIG, tokenRefreshMarginMinutes: 100 })).toThrow(
+      'tokenRefreshMarginMinutes musi być w zakresie 0-60',
+    );
+  });
 
-    expect(() => validateConfig(VALID_CONFIG)).toThrow('Wymagany plik nie istnieje');
+  it('powinien rzucić błąd gdy exportPollIntervalSeconds jest poza zakresem 1-300', () => {
+    expect(() => validateConfig({ ...VALID_CONFIG, exportPollIntervalSeconds: 0 })).toThrow(
+      'exportPollIntervalSeconds musi być w zakresie 1-300',
+    );
+  });
+
+  it('powinien rzucić błąd gdy exportStatusMaxWaitMinutes jest ujemny', () => {
+    expect(() => validateConfig({ ...VALID_CONFIG, exportStatusMaxWaitMinutes: -1 })).toThrow(
+      'exportStatusMaxWaitMinutes nie może być ujemny',
+    );
   });
 });

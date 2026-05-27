@@ -35,21 +35,6 @@ export const TIMEOUTS = Object.freeze<TTimeouts>({
 });
 
 /**
- * Tworzy kontroler AbortController z timeoutem
- * @param {number} timeoutMs - Timeout w milisekundach
- * @returns {AbortController} Kontroler abort
- */
-function createAbortController(timeoutMs: number): AbortController {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  // Cleanup timeout po zakończeniu requestu
-  controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
-
-  return controller;
-}
-
-/**
  * Opcje retry dla HTTP requestów
  */
 export type TRetryOptions = {
@@ -79,16 +64,13 @@ export async function httpRequest(
     Accept: 'application/json',
   };
 
-  // Utwórz AbortController z timeoutem
-  const controller = createAbortController(timeout);
-
   const mergedOptions: RequestInit = {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
-    signal: controller.signal,
+    signal: AbortSignal.timeout(timeout),
   };
 
   try {
@@ -121,8 +103,9 @@ export async function httpRequest(
 
     return response;
   } catch (error: unknown) {
-    // Błąd timeoutu
-    if ((error as Error).name === 'AbortError') {
+    // Błąd timeoutu (AbortSignal.timeout zgłasza DOMException z name === 'TimeoutError')
+    const errName = (error as Error).name;
+    if (errName === 'TimeoutError' || errName === 'AbortError') {
       throw new Error(`Request timeout po ${timeout}ms: ${url}`);
     }
 

@@ -13,20 +13,16 @@ export type TEnvironment = 'DEMO' | 'TEST' | 'PRD';
 export interface IConfig {
   readonly env: TEnvironment;
   readonly baseUrl: string;
-  readonly certPath: string;
-  readonly certKeyPath: string;
-  readonly certPassword: string;
   readonly tokenPath: string;
   readonly publicKeyPath: string;
   readonly nip: string;
-  readonly outputDir: string;
+  readonly xmlDir: string;
+  readonly pdfDir: string;
   readonly tempDir: string;
-  readonly templatePath: string | null;
   readonly tokenStoragePath: string;
   readonly tokenRefreshMarginMinutes: number;
   readonly exportPollIntervalSeconds: number;
   readonly exportStatusMaxWaitMinutes: number;
-  readonly libreOfficePath: string | null;
 }
 
 /**

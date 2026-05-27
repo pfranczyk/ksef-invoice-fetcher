@@ -1,14 +1,14 @@
 /**
  * Główny orkiestrator procesu generowania PDF
- * Odpowiedzialny za koordynację całego procesu
+ * Pipeline: XML → parse → mapInvoiceData → docDefinition (pdfmake) → PDF
  */
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { createDirectory, deleteFile, fileExists } from '../utils/file-system.ts';
+import { createDirectory, fileExists } from '../utils/file-system.ts';
 import logger from '../utils/logger.ts';
-import { convertDocxToPdf } from './docx-to-pdf.ts';
-import { processTemplate, validateTemplate } from './template-processor.ts';
+import { buildInvoicePdfDocDefinition } from './pdf-template.ts';
+import { writePdfToFile } from './pdf-writer.ts';
 import { mapInvoiceData, parseInvoiceXml } from './xml-parser.ts';
 
 /**
@@ -16,9 +16,8 @@ import { mapInvoiceData, parseInvoiceXml } from './xml-parser.ts';
  */
 type TGeneratePdfOptions = {
   month: string;
-  outputDir: string;
-  templatePath?: string;
-  pdfOutputDir?: string;
+  xmlDir: string;
+  pdfDir: string;
   startDay?: number;
   endDay?: number;
 };
@@ -53,21 +52,20 @@ interface IMetadataFile {
  * Wynik funkcji prepareDirectories
  */
 interface IDirectoryPaths {
-  monthDir: string;
-  pdfDir: string;
-  tempDir: string;
+  xmlMonthDir: string;
+  pdfMonthDir: string;
 }
 
 /**
  * Główna funkcja generowania PDF dla faktur z określonego miesiąca
  * @param {Object} options - Opcje generowania
  * @param {string} options.month - Miesiąc w formacie YYYY-MM
- * @param {string} options.outputDir - Katalog bazowy (np. 'output')
- * @param {string} options.templatePath - Ścieżka do szablonu DOCX (opcjonalna)
- * @param {string} options.pdfOutputDir - Katalog dla PDF (opcjonalna)
+ * @param {string} options.xmlDir - Katalog bazowy z fakturami XML
+ * @param {string} options.pdfDir - Katalog bazowy docelowy PDF
  * @param {number} options.startDay - Dzień początkowy filtrowania (opcjonalny, 1-31)
  * @param {number} options.endDay - Dzień końcowy filtrowania (opcjonalny, 1-31)
  * @returns {Promise<Object>} - Statystyki procesu
+ * @throws {Error} Gdy parametry, katalog faktur lub metadane są niepoprawne
  */
 export async function generatePdfForMonth(options: TGeneratePdfOptions): Promise<IGenerateStats> {
   const startTime = Date.now();
@@ -91,20 +89,16 @@ export async function generatePdfForMonth(options: TGeneratePdfOptions): Promise
 
   try {
     // Krok 1: Walidacja parametrów
-    logger.info('Krok 1/6: Walidacja parametrów');
+    logger.info('Krok 1/4: Walidacja parametrów');
     await validateParameters(options);
 
     // Krok 2: Przygotowanie katalogów
-    logger.info('Krok 2/6: Przygotowanie katalogów');
-    const { monthDir, pdfDir, tempDir } = await prepareDirectories(options);
+    logger.info('Krok 2/4: Przygotowanie katalogów');
+    const { xmlMonthDir, pdfMonthDir } = await prepareDirectories(options);
 
-    // Krok 3: Walidacja/przygotowanie szablonu
-    logger.info('Krok 3/6: Walidacja szablonu');
-    const templatePath = await prepareTemplate(options.templatePath);
-
-    // Krok 4: Wczytanie metadanych faktur
-    logger.info('Krok 4/6: Wczytywanie metadanych faktur');
-    const invoices = await loadInvoiceMetadata(monthDir, options);
+    // Krok 3: Wczytanie metadanych faktur
+    logger.info('Krok 3/4: Wczytywanie metadanych faktur');
+    const invoices = await loadInvoiceMetadata(xmlMonthDir, options);
     stats.total = invoices.length;
 
     if (invoices.length === 0) {
@@ -114,13 +108,9 @@ export async function generatePdfForMonth(options: TGeneratePdfOptions): Promise
 
     logger.info(`Znaleziono ${invoices.length} faktur do przetworzenia`);
 
-    // Krok 5: Przetwarzanie każdej faktury
-    logger.info('Krok 5/6: Przetwarzanie faktur');
-    await processInvoices(invoices, monthDir, templatePath, tempDir, pdfDir, stats);
-
-    // Krok 6: Czyszczenie
-    logger.info('Krok 6/6: Czyszczenie plików tymczasowych');
-    await cleanupTempFiles(tempDir);
+    // Krok 4: Przetwarzanie każdej faktury
+    logger.info('Krok 4/4: Przetwarzanie faktur');
+    await processInvoices(invoices, xmlMonthDir, pdfMonthDir, stats);
 
     // Podsumowanie
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -131,7 +121,7 @@ export async function generatePdfForMonth(options: TGeneratePdfOptions): Promise
     logger.info(`Nieudane: ${stats.failed}`);
     logger.info(`Pominięte: ${stats.skipped}`);
     logger.info(`Czas trwania: ${duration}s`);
-    logger.info(`Lokalizacja plików PDF: ${pdfDir}`);
+    logger.info(`Lokalizacja plików PDF: ${pdfMonthDir}`);
     logger.info('='.repeat(60));
 
     // Jeśli były błędy, wyświetl je
@@ -152,6 +142,9 @@ export async function generatePdfForMonth(options: TGeneratePdfOptions): Promise
 
 /**
  * Waliduje parametry wejściowe
+ * @param {TGeneratePdfOptions} options - Opcje generowania
+ * @returns {Promise<void>}
+ * @throws {Error} Gdy format miesiąca lub zakres dni jest nieprawidłowy
  */
 async function validateParameters(options: TGeneratePdfOptions): Promise<void> {
   // Walidacja formatu miesiąca (YYYY-MM)
@@ -186,59 +179,37 @@ async function validateParameters(options: TGeneratePdfOptions): Promise<void> {
 
 /**
  * Przygotowuje katalogi robocze
+ * @param {TGeneratePdfOptions} options - Opcje generowania
+ * @returns {Promise<IDirectoryPaths>} Ścieżki katalogu faktur i katalogu PDF (per miesiąc)
+ * @throws {Error} Gdy katalog z fakturami XML nie istnieje
  */
 async function prepareDirectories(options: TGeneratePdfOptions): Promise<IDirectoryPaths> {
   const [, month] = options.month.split('-');
 
-  // Katalog z fakturami XML
-  const monthDir = join(options.outputDir, month);
+  const xmlMonthDir = join(options.xmlDir, month);
 
-  // Sprawdź czy katalog z fakturami istnieje
-  if (!(await fileExists(monthDir))) {
+  if (!(await fileExists(xmlMonthDir))) {
     throw new Error(
-      `Nie znaleziono katalogu faktur: ${monthDir}\nNajpierw pobierz faktury używając: --df ${options.month}-01 --dt ${options.month}-31`,
+      `Nie znaleziono katalogu faktur: ${xmlMonthDir}\nNajpierw pobierz faktury używając: ksef fetch --df ${options.month}`,
     );
   }
 
-  // Katalog dla PDF (domyślnie output/{MM}/pdf/)
-  const pdfDir = options.pdfOutputDir || join(monthDir, 'pdf');
-  await createDirectory(pdfDir);
-  logger.debug(`Katalog wyjściowy PDF: ${pdfDir}`);
+  const pdfMonthDir = join(options.pdfDir, month);
+  await createDirectory(pdfMonthDir);
+  logger.debug(`Katalog wyjściowy PDF: ${pdfMonthDir}`);
 
-  // Katalog tymczasowy dla pośrednich plików DOCX
-  const tempDir = join(monthDir, '.temp-pdf');
-  await createDirectory(tempDir);
-  logger.debug(`Katalog tymczasowy: ${tempDir}`);
-
-  return { monthDir, pdfDir, tempDir };
-}
-
-/**
- * Przygotowuje szablon DOCX
- */
-async function prepareTemplate(templatePath: string | undefined): Promise<string> {
-  if (!templatePath) {
-    throw new Error(
-      'Wymagana jest ścieżka do szablonu. Podaj plik DOCX przez --template lub ustaw TEMPLATE_DOCX w .env',
-    );
-  }
-
-  // Użyj wskazanego szablonu
-  logger.info(`Używam szablonu: ${templatePath}`);
-
-  const isValid = await validateTemplate(templatePath);
-  if (!isValid) {
-    throw new Error(`Nieprawidłowy lub uszkodzony plik szablonu: ${templatePath}`);
-  }
-
-  return templatePath;
+  return { xmlMonthDir, pdfMonthDir };
 }
 
 /**
  * Wczytuje metadane faktur i filtruje według kryteriów
+ * @param {string} xmlMonthDir - Katalog miesiąca z fakturami XML
+ * @param {TGeneratePdfOptions} options - Opcje generowania (filtr dni)
+ * @returns {Promise<IInvoiceMetadataItem[]>} Lista faktur po filtracji
+ * @throws {Error} Gdy plik _metadata.json nie istnieje
  */
-async function loadInvoiceMetadata(monthDir: string, options: TGeneratePdfOptions): Promise<IInvoiceMetadataItem[]> {
-  const metadataPath = join(monthDir, '_metadata.json');
+async function loadInvoiceMetadata(xmlMonthDir: string, options: TGeneratePdfOptions): Promise<IInvoiceMetadataItem[]> {
+  const metadataPath = join(xmlMonthDir, '_metadata.json');
 
   if (!(await fileExists(metadataPath))) {
     throw new Error(`Nie znaleziono pliku metadanych: ${metadataPath}`);
@@ -269,14 +240,17 @@ async function loadInvoiceMetadata(monthDir: string, options: TGeneratePdfOption
 }
 
 /**
- * Przetwarza wszystkie faktury
+ * Przetwarza wszystkie faktury: XML → dane → PDF (pdfmake)
+ * @param {IInvoiceMetadataItem[]} invoices - Lista faktur do przetworzenia
+ * @param {string} xmlMonthDir - Katalog miesiąca z fakturami XML
+ * @param {string} pdfMonthDir - Katalog miesiąca docelowy PDF
+ * @param {IGenerateStats} stats - Statystyki (mutowane)
+ * @returns {Promise<void>}
  */
 async function processInvoices(
   invoices: IInvoiceMetadataItem[],
-  monthDir: string,
-  templatePath: string,
-  tempDir: string,
-  pdfDir: string,
+  xmlMonthDir: string,
+  pdfMonthDir: string,
   stats: IGenerateStats,
 ): Promise<void> {
   for (let i = 0; i < invoices.length; i++) {
@@ -286,38 +260,28 @@ async function processInvoices(
     logger.info(`\n[${invoiceNumber}/${invoices.length}] Przetwarzanie: ${invoice.ksefNumber}`);
 
     try {
-      // Ścieżka do pliku XML
       const xmlFileName = `${invoice.ksefNumber}.xml`;
-      const xmlPath = join(monthDir, xmlFileName);
+      const xmlPath = join(xmlMonthDir, xmlFileName);
 
-      // Sprawdź czy plik XML istnieje
       if (!(await fileExists(xmlPath))) {
         logger.warn(`Brak pliku XML: ${xmlFileName} - pomijam`);
         stats.skipped++;
         continue;
       }
 
-      // Krok 1: Parsuj XML
       logger.debug('Parsowanie XML...');
       const parsedXml = await parseInvoiceXml(xmlPath);
 
-      // Krok 2: Mapuj dane
       logger.debug('Mapowanie danych faktury...');
       const invoiceData = mapInvoiceData(parsedXml, xmlFileName);
 
-      // Krok 3: Wypełnij szablon DOCX
-      const tempDocxPath = join(tempDir, `${invoice.ksefNumber}.docx`);
-      logger.debug('Wypełnianie szablonu...');
-      await processTemplate(templatePath, invoiceData, tempDocxPath);
+      logger.debug('Budowanie definicji PDF...');
+      const docDefinition = buildInvoicePdfDocDefinition(invoiceData);
 
-      // Krok 4: Konwertuj DOCX na PDF
       const pdfFileName = `${invoice.ksefNumber}.pdf`;
-      const pdfPath = join(pdfDir, pdfFileName);
-      logger.debug('Konwersja do PDF...');
-      await convertDocxToPdf(tempDocxPath, pdfPath);
-
-      // Usuń tymczasowy DOCX
-      await deleteFile(tempDocxPath);
+      const pdfPath = join(pdfMonthDir, pdfFileName);
+      logger.debug('Zapisywanie PDF...');
+      await writePdfToFile(docDefinition, pdfPath);
 
       stats.success++;
       logger.info(`✓ Wygenerowano poprawnie: ${pdfFileName}`);
@@ -330,28 +294,5 @@ async function processInvoices(
       });
       logger.error(`✗ Nie udało się przetworzyć ${invoice.ksefNumber}: ${errorMessage}`);
     }
-  }
-}
-
-/**
- * Czyści pliki tymczasowe
- */
-async function cleanupTempFiles(tempDir: string): Promise<void> {
-  try {
-    // Usuń wszystkie pliki w katalogu tymczasowym
-    const files = await fs.readdir(tempDir);
-
-    for (const file of files) {
-      const filePath = join(tempDir, file);
-      await deleteFile(filePath);
-    }
-
-    // Usuń katalog tymczasowy
-    await fs.rmdir(tempDir);
-
-    logger.debug('Pliki tymczasowe usunięte');
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.warn(`Nie udało się posprzątać plików tymczasowych: ${errorMessage}`);
   }
 }

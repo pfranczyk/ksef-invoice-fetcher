@@ -1,0 +1,12 @@
+# Wymuszenie zakończeń linii LF niezależnie od core.autocrlf na danym PC.
+# Bez tego checkout na Windows (autocrlf=true) daje CRLF i biome (LF) pada.
+* text=auto eol=lf
+
+# Pliki binarne — bez konwersji zakończeń linii
+*.docx binary
+*.pdf  binary
+*.png  binary
+*.ico  binary
+*.crt  binary
+*.key  binary
+*.pem  binary

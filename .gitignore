@@ -12,8 +12,11 @@ node_modules/
 output/
 tmp/
 
+# Build output (tsup)
+dist/
+
 #templates
-templates/*
+templates/
 !templates/Faktura.docx
 
 # Logs
@@ -37,15 +40,5 @@ Thumbs.db
 *.token
 *.pem
 
-# External KSeF documentation (not part of project)
-ksef-docs/
-open-api.json
-
-# Token storage directory
-tokens/
-
 # Test coverage
 coverage/
-
-# Claude Code
-.claude/

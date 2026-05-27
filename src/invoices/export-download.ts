@@ -44,16 +44,11 @@ const DOWNLOAD_RETRY_DELAY_MS = 20_000;
  * @throws {Error} Gdy nie udało się pobrać pliku lub timeout
  */
 async function downloadBinary(url: string, method: string = 'GET'): Promise<Buffer> {
-  const controller: AbortController = new AbortController();
-  const timeoutId: NodeJS.Timeout = setTimeout((): void => controller.abort(), TIMEOUTS.DOWNLOAD);
-
   try {
     const response: Response = await fetch(url, {
       method,
-      signal: controller.signal,
+      signal: AbortSignal.timeout(TIMEOUTS.DOWNLOAD),
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -62,10 +57,8 @@ async function downloadBinary(url: string, method: string = 'GET'): Promise<Buff
     const arrayBuffer: ArrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);
   } catch (error: unknown) {
-    clearTimeout(timeoutId);
-
     const err = error as Error & { name?: string };
-    if (err.name === 'AbortError') {
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
       throw new Error(`Request timeout po ${TIMEOUTS.DOWNLOAD}ms podczas pobierania pliku`);
     }
     throw error;

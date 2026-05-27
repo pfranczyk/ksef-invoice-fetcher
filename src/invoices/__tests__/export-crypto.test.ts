@@ -10,20 +10,16 @@ import { computeSha256Base64, decryptAes256Cbc, generateEncryptionParams, isZipM
 const MOCK_CONFIG = Object.freeze<IConfig>({
   env: 'TEST',
   baseUrl: 'https://api-test.ksef.mf.gov.pl',
-  certPath: '/certs/test.crt',
-  certKeyPath: '/certs/test.key',
-  certPassword: '',
-  tokenPath: '/tokens/ksef.token',
-  publicKeyPath: '/certs/public-key.pem',
+  tokenPath: '/.ksef/ksef.token',
+  publicKeyPath: '/.ksef/public-key.pem',
   nip: '1234567890',
-  outputDir: '/output',
-  tempDir: '/tmp',
-  templatePath: null,
-  tokenStoragePath: '/tokens/ksef-tokens.json',
+  xmlDir: '/xml',
+  pdfDir: '/pdf',
+  tempDir: '/.ksef/tmp',
+  tokenStoragePath: '/.ksef/tokens.json',
   tokenRefreshMarginMinutes: 2,
   exportPollIntervalSeconds: 5,
   exportStatusMaxWaitMinutes: 10,
-  libreOfficePath: null,
 });
 
 const NOW_MS = 1767268800000; // 2026-01-01T12:00:00.000Z — certyfikaty są w zakresie 2020–2030

@@ -151,7 +151,10 @@ export async function runSingleExport({
 
       // 7. Sprawdzenie ważności paczki
       const packageExpirationDate: string | undefined = exportStatus.packageExpirationDate;
-      if (packageExpirationDate && new Date(packageExpirationDate) < new Date()) {
+      if (packageExpirationDate === undefined) {
+        throw new Error('API nie zwróciło daty wygaśnięcia paczki (packageExpirationDate)');
+      }
+      if (new Date(packageExpirationDate) < new Date()) {
         throw new Error('Paczka wygasła przed rozpoczęciem pobierania');
       }
 
@@ -161,7 +164,7 @@ export async function runSingleExport({
         parts: packageData.parts,
         aesKey: encryption.aesKey,
         iv: encryption.iv,
-        packageExpirationDate: packageExpirationDate!,
+        packageExpirationDate,
         logger,
       });
 

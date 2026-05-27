@@ -124,14 +124,20 @@ export async function unpackAndStoreInvoices({
 
   // Zapisz pliki XML
   for (const xmlFile of xmlFiles) {
+    if (xmlFile.content === null) {
+      continue;
+    }
     const fileName: string = basename(xmlFile.name);
     const filePath: string = join(targetDir, fileName);
-    await writeBinaryFile(filePath, xmlFile.content!);
+    await writeBinaryFile(filePath, xmlFile.content);
   }
 
   // Zapisz _metadata.json
+  if (metadataEntry.content === null) {
+    throw new Error('Plik _metadata.json nie zawiera danych');
+  }
   const metadataPath: string = join(targetDir, '_metadata.json');
-  await writeBinaryFile(metadataPath, metadataEntry.content!);
+  await writeBinaryFile(metadataPath, metadataEntry.content);
 
   logger.info(`✓ Zapisano ${xmlFiles.length} faktur do katalogu: ${targetDir}`);
 
