@@ -2,6 +2,18 @@
 
 Wszystkie istotne zmiany w projekcie dokumentowane są w tym pliku. Format inspirowany [Keep a Changelog](https://keepachangelog.com/), wersjonowanie zgodne z [SemVer](https://semver.org/).
 
+## [0.7.1] — 2026-07-18
+
+### Bezpieczeństwo
+
+- Aktualizacja `adm-zip` do 0.6.0 — usuwa podatność CVE-2026-39244
+  (nieograniczona alokacja pamięci przy rozpakowywaniu złośliwie
+  spreparowanego archiwum ZIP paczki eksportu faktur).
+
+### Zmieniono
+
+- Aktualizacja `commander` do 15.0.0.
+
 ## [0.7.0] — 2026-05-27
 
 Pierwsze publiczne wydanie programu `ksef` na npm pod scoped name
@@ -43,6 +55,7 @@ i nie trafiały do publicznego npm registry.
 
 Punkt startowy liczenia zmian w niniejszym dokumencie.
 
-[Unreleased]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/pfranczyk/ksef-invoice-fetcher/releases/tag/v0.6.0

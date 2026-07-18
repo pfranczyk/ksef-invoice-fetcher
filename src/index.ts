@@ -31,8 +31,10 @@ function translateCommanderError(err: CommanderError): string {
     case 'commander.unknownCommand':
       return raw.replace(/^unknown command '(.+?)'$/, "Nieznana komenda '$1'.");
     case 'commander.excessArguments':
+      // Po liczbie otrzymanych argumentów Commander dokleja listę nadmiarowych
+      // wartości po dwukropku (`: a, b`) — dopuszczamy ten sufiks opcjonalnie.
       return raw.replace(
-        /^too many arguments for '(.+?)'\. Expected (\d+) argument(s?) but got (\d+)\.$/,
+        /^too many arguments for '(.+?)'\. Expected (\d+) argument(s?) but got (\d+)(?::.*)?\.$/,
         "Za dużo argumentów dla '$1'. Oczekiwano $2, otrzymano $4.",
       );
     case 'commander.invalidArgument':

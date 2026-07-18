@@ -1,6 +1,6 @@
 {
   "name": "@logrox/ksef",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "CLI do pobierania faktur i generowania PDF z KSeF API 2.0",
   "license": "ISC",
   "author": "Paweł Franczyk",
@@ -52,17 +52,17 @@
   ],
   "dependencies": {
     "@logrox/ksef-login": "^0.1.0",
-    "adm-zip": "^0.5.17",
-    "commander": "^14.0.3",
+    "adm-zip": "^0.6.0",
+    "commander": "^15.0.0",
     "node-forge": "^1.4.0",
     "pdfmake": "^0.2.23",
     "winston": "^3.19.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
+    "@biomejs/biome": "^2.5.4",
     "@types/adm-zip": "^0.5.8",
-    "@types/node": "^25.9.1",
+    "@types/node": "^24.13.3",
     "@types/node-forge": "^1.3.14",
     "@types/pdfmake": "^0.2.13",
     "@types/xml2js": "^0.4.14",
