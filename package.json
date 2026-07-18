@@ -1,6 +1,6 @@
 {
   "name": "@logrox/ksef",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "CLI do pobierania faktur i generowania PDF z KSeF API 2.0",
   "license": "ISC",
   "author": "Paweł Franczyk",

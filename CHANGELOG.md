@@ -2,6 +2,14 @@
 
 Wszystkie istotne zmiany w projekcie dokumentowane są w tym pliku. Format inspirowany [Keep a Changelog](https://keepachangelog.com/), wersjonowanie zgodne z [SemVer](https://semver.org/).
 
+## [0.7.2] — 2026-07-18
+
+### Naprawiono
+
+- `ksef --version` pokazuje właściwy numer wersji — czytany dynamicznie
+  z `package.json` (wcześniej wartość była zaszyta na stałe i mogła rozjechać
+  się z wersją paczki).
+
 ## [0.7.1] — 2026-07-18
 
 ### Bezpieczeństwo
@@ -55,7 +63,8 @@ i nie trafiały do publicznego npm registry.
 
 Punkt startowy liczenia zmian w niniejszym dokumencie.
 
-[Unreleased]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/pfranczyk/ksef-invoice-fetcher/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/pfranczyk/ksef-invoice-fetcher/releases/tag/v0.6.0

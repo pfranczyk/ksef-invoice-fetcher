@@ -2,6 +2,7 @@
 /**
  * Punkt wejścia CLI @logrox/ksef
  */
+import { readFileSync } from 'node:fs';
 import { Command, CommanderError, Help } from 'commander';
 import type { TGlobalOpts } from './commands/_shared.ts';
 import { fetchCmd, type TFetchOpts } from './commands/fetch.ts';
@@ -11,6 +12,17 @@ import { loginCmd } from './commands/login.ts';
 import { marginCmd } from './commands/margin.ts';
 import { pdfCmd, type TPdfOpts } from './commands/pdf.ts';
 import logger from './utils/logger.ts';
+
+/**
+ * Numer wersji CLI czytany z `package.json` (jedno źródło prawdy). `../package.json`
+ * rozwiązuje się do korzenia paczki zarówno z `src/index.ts` (build), jak i
+ * `dist/index.js` (runtime) — oba leżą jeden poziom pod korzeniem.
+ */
+const PACKAGE_VERSION: string = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    readonly version: string;
+  }
+).version;
 
 /**
  * Tłumaczy komunikat błędu Commandera na język polski.
@@ -94,7 +106,7 @@ const program = new Command();
 program
   .name('ksef')
   .description('CLI do pobierania faktur i generowania PDF z KSeF API 2.0')
-  .version('0.7.0', '-V, --version', 'wyświetla numer wersji')
+  .version(PACKAGE_VERSION, '-V, --version', 'wyświetla numer wersji')
   .helpOption('-h, --help', 'wyświetla pomoc komendy')
   .helpCommand(false)
   .option('-v, --verbose', 'Tryb debug (szczegółowe logi)')
